@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
 using Remotion.Linq.Clauses;
+using Remotion.Linq.Clauses.Expressions;
 using Remotion.Linq.UnitTests.TestDomain;
 
 namespace Remotion.Linq.UnitTests.Parsing.Structure.QueryParserIntegrationTests
@@ -34,6 +35,8 @@ namespace Remotion.Linq.UnitTests.Parsing.Structure.QueryParserIntegrationTests
                   select Tuple.Create (s, sds);
 
       var queryModel = QueryParser.GetParsedQuery (query.Expression);
+      //from Cook s in TestQueryable<Cook>() join Kitchen sd in TestQueryable<Kitchen>() on [s].ID equals [sd].RoomNumber into IEnumerable`1 sds select Create([s], [sds])
+      Console.WriteLine (queryModel.ToString());
       Assert.That (queryModel.GetOutputDataInfo ().DataType, Is.SameAs (typeof (IQueryable<Tuple<Cook, IEnumerable<Kitchen>>>)));
 
       var mainFromClause = queryModel.MainFromClause;
@@ -56,6 +59,61 @@ namespace Remotion.Linq.UnitTests.Parsing.Structure.QueryParserIntegrationTests
           mainFromClause,
           groupJoinClause,
           (s, sds) => Tuple.Create (s, sds));
+    }
+
+    [Test]
+    [Explicit]
+    public void GroupJoin_WithSubQueryAsFirstQuerySource ()
+    {
+      var query = from s in QuerySource.Take (2)
+                  join sd in DetailQuerySource on s.ID equals sd.RoomNumber into sds
+                  select Tuple.Create (s, sds);
+
+      var queryModel = QueryParser.GetParsedQuery (query.Expression);
+      //Expected: from Cook <generated>_1 in {TestQueryable<Cook>() => Take(2)} join Kitchen sd in TestQueryable<Kitchen>() on [<generated>_1].ID equals [sd].RoomNumber into IEnumerable`1 sds select Create([<generated>_1], [sds])
+      //Actual:   from Cook s in {TestQueryable<Cook>() => Take(2)} join Kitchen sd in TestQueryable<Kitchen>() on [<generated>_1].ID equals [sd].RoomNumber into IEnumerable`1 sds select Create([s], [sds])
+      Console.WriteLine (queryModel.ToString());
+      Assert.That (queryModel.GetOutputDataInfo ().DataType, Is.SameAs (typeof (IQueryable<Tuple<Cook, IEnumerable<Kitchen>>>)));
+
+      var mainFromClause = queryModel.MainFromClause;
+      Assert.That (mainFromClause.ItemType, Is.SameAs (typeof (Cook)));
+      Assert.That (mainFromClause.ItemName, Is.EqualTo ("<generated>_1"));
+
+      var subQueryModel = ((SubQueryExpression) mainFromClause.FromExpression).QueryModel;
+      var subQueryMainFromClause = subQueryModel.MainFromClause;
+      Assert.That (subQueryMainFromClause.ItemType, Is.SameAs (typeof (Cook)));
+      Assert.That (subQueryMainFromClause.ItemName, Is.EqualTo ("<generated>_1"));
+
+      var groupJoinClause = ((GroupJoinClause) queryModel.BodyClauses[0]);
+      Assert.That (groupJoinClause.ItemName, Is.SameAs ("sds"));
+      Assert.That (groupJoinClause.ItemType, Is.SameAs (typeof (IEnumerable<Kitchen>)));
+      CheckConstantQuerySource (groupJoinClause.JoinClause.InnerSequence, DetailQuerySource);
+      Assert.That (groupJoinClause.JoinClause.ItemType, Is.SameAs (typeof (Kitchen)));
+      Assert.That (groupJoinClause.JoinClause.ItemName, Is.EqualTo ("sd"));
+      CheckResolvedExpression<Cook, int> (groupJoinClause.JoinClause.OuterKeySelector, mainFromClause, s => s.ID);
+      CheckResolvedExpression<Kitchen, int> (groupJoinClause.JoinClause.InnerKeySelector, groupJoinClause.JoinClause, sd => sd.RoomNumber);
+
+      var selectClause = queryModel.SelectClause;
+      CheckResolvedExpression<Cook, IEnumerable<Kitchen>, Tuple<Cook, IEnumerable<Kitchen>>> (
+          selectClause.Selector,
+          mainFromClause,
+          groupJoinClause,
+          (s, sds) => Tuple.Create (s, sds));
+    }
+
+    [Test]
+    [Explicit]
+    public void GroupJoin_1 ()
+    {
+      var query = from s in QuerySource
+        join sd in DetailQuerySource on s.ID equals sd.RoomNumber into sds
+        from k in sds.DefaultIfEmpty()
+        select k;
+
+      var queryModel = QueryParser.GetParsedQuery (query.Expression);
+      //Expected: from Cook <generated>_1 in {TestQueryable<Cook>() => Take(1)} join Kitchen sd in TestQueryable<Kitchen>() on [s].ID equals [sd].RoomNumber into IEnumerable`1 sds from Kitchen k in {[sds] => DefaultIfEmpty()} select [k]
+      //Actual:   from Cook s in {TestQueryable<Cook>() => Take(1)} join Kitchen sd in TestQueryable<Kitchen>() on [<generated>_1].ID equals [sd].RoomNumber into IEnumerable`1 sds from Kitchen k in {[sds] => DefaultIfEmpty()} select [k]
+      Console.WriteLine (queryModel.ToString());
     }
 
     [Test]
